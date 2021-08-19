@@ -43,22 +43,22 @@ them in parent array as negative numbers. Thus the encoding of parent is:
 
 using namespace std;
 
-int64_t BUStep(const Graph &g, pvector<NodeID> *parent, Bitmap &front,
-               Bitmap &next) {
+int64_t BUStep(const Graph *g, pvector<NodeID> *parent, Bitmap *front,
+               Bitmap *next) {
   int64_t awake_count = 0;
-  next.reset();
+  next->reset();
 #ifdef USE_OMP_ACCELERATOR
 #pragma omp target teams distribute parallel for reduction(+ : awake_count) schedule(dynamic, 1024)
 #else
 #pragma omp parallel for reduction(+ : awake_count) schedule(dynamic, 1024)
 #endif   
-  for (NodeID u=0; u < g.num_nodes(); u++) {
+  for (NodeID u=0; u < g->num_nodes(); u++) {
     if (parent->operator[](u) < 0) {
-      for (NodeID v : g.in_neigh(u)) {
-        if (front.get_bit(v)) {
+      for (NodeID v : g->in_neigh(u)) {
+        if (front->get_bit(v)) {
           parent->operator[](u) = v;
           awake_count++;
-          next.set_bit(u);
+          next->set_bit(u);
           break;
         }
       }
@@ -68,7 +68,7 @@ int64_t BUStep(const Graph &g, pvector<NodeID> *parent, Bitmap &front,
 }
 
 
-int64_t TDStep(const Graph &g, pvector<NodeID> *parent,
+int64_t TDStep(const Graph *g, pvector<NodeID> *parent,
                SlidingQueue<NodeID> *queue) {
   int64_t scout_count = 0;
   QueueBuffer<NodeID> *lqueue = new QueueBuffer<NodeID>(*queue);
@@ -91,7 +91,7 @@ int64_t TDStep(const Graph &g, pvector<NodeID> *parent,
 #endif
     for ( NodeID *q_iter = queue->begin(); q_iter < queue->end(); q_iter++) {
       NodeID u = *q_iter;
-      for (NodeID v : g.out_neigh(u)) {
+      for (NodeID v : g->out_neigh(u)) {
         NodeID curr_val = parent->operator[](v);
         if (curr_val < 0) {
 //#pragma omp atomic capture
@@ -113,7 +113,7 @@ int64_t TDStep(const Graph &g, pvector<NodeID> *parent,
 }
 
 
-void QueueToBitmap(const SlidingQueue<NodeID> *queue, Bitmap &bm) {
+void QueueToBitmap(const SlidingQueue<NodeID> *queue, Bitmap *bm) {
 
 #ifdef USE_OMP_ACCELERATOR
 #pragma omp target teams distribute parallel for
@@ -123,11 +123,11 @@ void QueueToBitmap(const SlidingQueue<NodeID> *queue, Bitmap &bm) {
   //auto q_iter
   for (NodeID *q_iter = queue->begin(); q_iter < queue->end(); q_iter++) {
     NodeID u = *q_iter;
-    bm.set_bit_atomic(u);
+    bm->set_bit_atomic(u);
   }
 }
 
-void BitmapToQueue(const Graph &g, const Bitmap &bm,SlidingQueue<NodeID> *queue) {
+void BitmapToQueue(const Graph *g, const Bitmap *bm,SlidingQueue<NodeID> *queue) {
   QueueBuffer<NodeID> *lqueue = new QueueBuffer<NodeID>(*queue);
 /**  #pragma omp parallel
   {
@@ -139,26 +139,26 @@ void BitmapToQueue(const Graph &g, const Bitmap &bm,SlidingQueue<NodeID> *queue)
 #else
 #pragma omp parallel for nowait
 #endif
-    for (NodeID n=0; n < g.num_nodes(); n++)
-      if (bm.get_bit(n))
+    for (NodeID n=0; n < g->num_nodes(); n++)
+      if (bm->get_bit(n))
         lqueue->push_back(n);
     lqueue->flush();
   queue->slide_window();
 }
 
-pvector<NodeID> *InitParent(const Graph &g) {
-  pvector<NodeID> *parent = new pvector<NodeID> (g.num_nodes());
+pvector<NodeID> *InitParent(const Graph *g) {
+  pvector<NodeID> *parent = new pvector<NodeID> (g->num_nodes());
 #ifdef USE_OMP_ACCELERATOR
 #pragma omp target teams distribute parallel for
 #else 
 #pragma omp parallel for
 #endif
-  for (NodeID n=0; n < g.num_nodes(); n++)
-    parent->operator[](n) = g.out_degree(n) != 0 ? -g.out_degree(n) : -1;
+  for (NodeID n=0; n < g->num_nodes(); n++)
+    parent->operator[](n) = g->out_degree(n) != 0 ? -g->out_degree(n) : -1;
   return parent;
 }
 
-pvector<NodeID> *DOBFS(const Graph &g, NodeID source, int alpha = 15,
+pvector<NodeID> *DOBFS(const Graph *g, NodeID source, int alpha = 15,
                       int beta = 18) {
 
 #ifdef USE_OMP_ACCELERATOR
@@ -169,19 +169,19 @@ pvector<NodeID> *DOBFS(const Graph &g, NodeID source, int alpha = 15,
   t.Stop();
   PrintStep("i", t.Seconds());
   parent->operator[](source) = source;
-  SlidingQueue<NodeID> *queue = new SlidingQueue<NodeID>(g.num_nodes());
+  SlidingQueue<NodeID> *queue = new SlidingQueue<NodeID>(g->num_nodes());
   queue->push_back(source);
   queue->slide_window();
-  Bitmap curr(g.num_nodes());
+  Bitmap curr(g->num_nodes());
   curr.reset();
-  Bitmap front(g.num_nodes());
-  front.reset();
-  int64_t edges_to_check = g.num_edges_directed();
-  int64_t scout_count = g.out_degree(source);
+  Bitmap *front = new Bitmap(g->num_nodes());
+  front->reset();
+  int64_t edges_to_check = g->num_edges_directed();
+  int64_t scout_count = g->out_degree(source);
   while (!queue->empty()) {
     if (scout_count > edges_to_check / alpha) {
       int64_t awake_count, old_awake_count;
-#pragma omp target enter data map(to:queue->shared[0:g.num_nodes()],parent->start_[0:g.num_nodes()])
+#pragma omp target enter data map(to:queue->shared[0:g->num_nodes()],parent->start_[0:g->num_nodes()])
       TIME_OP(t, QueueToBitmap(queue, front));
       PrintStep("e", t.Seconds());
       awake_count = queue->size();
@@ -189,12 +189,12 @@ pvector<NodeID> *DOBFS(const Graph &g, NodeID source, int alpha = 15,
       do {
         t.Start();
         old_awake_count = awake_count;
-        awake_count = BUStep(g, parent, front, curr);
-        front.swap(curr);
+        awake_count = BUStep(g, parent, front, &curr);
+        front->swap(curr);
         t.Stop();
         PrintStep("bu", t.Seconds(), awake_count);
       } while ((awake_count >= old_awake_count) ||
-               (awake_count > g.num_nodes() / beta));
+               (awake_count > g->num_nodes() / beta));
       TIME_OP(t, BitmapToQueue(g, front, queue));
       PrintStep("c", t.Seconds());
       scout_count = 1;
@@ -206,10 +206,10 @@ pvector<NodeID> *DOBFS(const Graph &g, NodeID source, int alpha = 15,
       t.Stop();
       PrintStep("td", t.Seconds(), queue->size());
     }
-#pragma omp target exit data map(from:parent->start_[0:g.num_nodes()])
+#pragma omp target exit data map(from:parent->start_[0:g->num_nodes()])
   }
   #pragma omp parallel for
-  for (NodeID n = 0; n < g.num_nodes(); n++)
+  for (NodeID n = 0; n < g->num_nodes(); n++)
     if (parent->operator[](n) < -1)
       parent->operator[](n) = -1;
 /**
@@ -358,7 +358,7 @@ int main(int argc, char* argv[]) {
   BenchmarkKernel(cli, g, BFSBound, PrintBFSStats, VerifierBound);
   */
   
-   pvector<NodeID> *parent_veri = DOBFS(g, sp->PickNext());
+   pvector<NodeID> *parent_veri = DOBFS(&g, sp->PickNext());
    SourcePicker<Graph> *vsp = new SourcePicker<Graph>(g, cli->start_vertex());
    BFSVerifier(g, vsp->PickNext(), parent_veri);
   
